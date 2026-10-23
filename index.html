@@ -254,6 +254,18 @@ h3 small{font-weight:500;text-transform:none;letter-spacing:0;font-size:14px}
 #tab-sheet .sheet-actions button{background:var(--blue);color:#fff;border-color:var(--blue)}
 .sheet-wrap{box-shadow:0 2px 10px rgba(11,30,58,.12);border:1px solid var(--line)}
 
+/* ---------- partidos guardados ---------- */
+.arch{list-style:none;margin:0;padding:0;border:1px solid var(--line-2);border-radius:var(--r);background:var(--card)}
+.arch li{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 14px;border-bottom:1px solid var(--line)}
+.arch li:last-child{border-bottom:0}
+.arch-t{flex:1;min-width:0}
+.arch-t b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arch-t small{color:var(--muted);font-size:13px}
+.arch-now{color:var(--blue-tx);font-weight:700}
+.arch button{min-height:40px}
+.arch button[data-act=arch-dl],.arch .arch-del{min-width:44px;padding:0;color:var(--muted)}
+.arch .arch-del:hover{color:var(--red);border-color:var(--red)}
+
 /* ---------- firma ---------- */
 .credit{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);display:flex;justify-content:center;align-items:baseline;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);letter-spacing:.02em}
 .credit span+span::before{content:"";display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--cel);margin-right:14px;vertical-align:middle}
@@ -397,6 +409,7 @@ h3 small{font-weight:500;text-transform:none;letter-spacing:0;font-size:14px}
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
   <symbol id="i-new" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v5h5"/></symbol>
   <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
   <symbol id="i-half" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18"/><path d="M12 7a5 5 0 0 1 0 10" fill="currentColor"/></symbol>
 </svg>
 
@@ -514,7 +527,7 @@ function defaultConfig(){
     attMode:'real', minuteMode:'clock', goalIsShot:false};
 }
 function emptyMatch(){
-  return {subs:[], events:[], rivalWins:[], att:[], swaps:[],
+  return {matchId:uid(), subs:[], events:[], rivalWins:[], att:[], swaps:[],
     clock:{phase:'pre', running:false, acc:0, since:0, len:{1:0,2:0}, dtSince:0}};
 }
 function blankState(){
@@ -524,6 +537,7 @@ function blankState(){
   }, emptyMatch());
 }
 function normalize(){
+  S.matchId = S.matchId || uid();
   S.config = Object.assign(defaultConfig(), S.config || {});
   S.formation = S.formation || {};
   S.swaps = S.swaps || [];
@@ -825,7 +839,7 @@ async function onPlay(){
 async function onPhase(){
   const c = S.clock;
   if (c.phase === '1T'){ if (!(await ask('¿Finalizar el 1er tiempo?\nA partir de ahora los cambios son de descanso y NO cuentan como ventana.', 'Fin 1ºT'))) return; startDT(curSec()); }
-  else if (c.phase === '2T'){ if (!(await ask('¿Finalizar el partido?', 'Fin partido'))) return; c.len[2] = curSec(); Object.assign(c, {phase:'FIN', running:false, acc:0}); }
+  else if (c.phase === '2T'){ if (!(await ask('¿Finalizar el partido?', 'Fin partido'))) return; c.len[2] = curSec(); Object.assign(c, {phase:'FIN', running:false, acc:0}); save(); if (archiveCurrent()) toast('Partido terminado y guardado en «Partidos guardados»'); }
   else if (c.phase === 'DT'){ if (!(await ask('¿Reabrir el 1er tiempo?\nEl reloj vuelve al final del 1ºT, en pausa.', 'Reabrir'))) return; Object.assign(c, {phase:'1T', running:false, acc:c.len[1]*1000}); }
   else if (c.phase === 'FIN'){ if (!(await ask('¿Reabrir el 2º tiempo?\nEl reloj vuelve al final del 2ºT, en pausa.', 'Reabrir'))) return; Object.assign(c, {phase:'2T', running:false, acc:c.len[2]*1000}); }
   commit();
@@ -837,8 +851,39 @@ function adjust(sec){
   shift(sec); commit();
   toast(`Reloj ${sec > 0 ? '+' : '−'}${Math.abs(sec) >= 60 ? Math.abs(sec)/60 + "'" : Math.abs(sec) + '"'}`, () => { shift(-sec); commit(); });
 }
+/* ---------- partidos guardados (en este dispositivo) ---------- */
+const ARCH_KEY = 'hojaPartidoCadete_archivo';
+function loadArchive(){ try { return JSON.parse(localStorage.getItem(ARCH_KEY)) || []; } catch(e){ return []; } }
+function hasMatchData(st = S){ return st.clock.phase !== 'pre' || st.events.length > 0 || st.subs.length > 0; }
+function matchLabel(st){
+  const l = st.events.filter(e => e.type === 'gol' && e.team === 'mcf').length, r = st.events.filter(e => e.type === 'gol' && e.team === 'rival').length;
+  return `${st.info.jornada ? 'J' + st.info.jornada + ' · ' : ''}${st.config.teamL} ${l}-${r} ${st.config.teamR || 'RIVAL'}`;
+}
+/* guarda (o actualiza) el partido actual en la lista; devuelve false si no hay espacio */
+function archiveCurrent(){
+  if (!hasMatchData()) return true;
+  const snap = JSON.parse(JSON.stringify(S));
+  if (snap.clock.running){ snap.clock.acc = elapsedMs(); snap.clock.running = false; }
+  const list = loadArchive().filter(a => a.id !== S.matchId);
+  list.unshift({id:S.matchId, savedAt:Date.now(), label:matchLabel(S), fecha:S.info.fecha || '', phase:S.clock.phase, data:snap});
+  try { localStorage.setItem(ARCH_KEY, JSON.stringify(list)); return true; }
+  catch(e){ toast('No hay espacio para guardar el partido. Descarga y borra partidos antiguos en Ajustes.'); return false; }
+}
+function archiveHTML(){
+  const list = loadArchive();
+  if (!list.length) return '<p class="note">Aún no hay partidos guardados. Se guardan solos al pulsar «Fin partido» y al empezar un partido nuevo.</p>';
+  const fdate = a => a.fecha ? a.fecha.split('-').reverse().join('/') : new Date(a.savedAt).toLocaleDateString('es-ES');
+  return `<ul class="arch">${list.map(a => `<li>
+      <div class="arch-t"><b>${esc(a.label)}</b><small>${fdate(a)}${a.phase !== 'FIN' ? ' · sin terminar' : ''}${a.id === S.matchId ? ' · <span class="arch-now">abierto ahora</span>' : ''}</small></div>
+      <button data-act="arch-load" data-id="${a.id}" ${a.id === S.matchId ? 'disabled' : ''}>Abrir</button>
+      <button data-act="arch-dl" data-id="${a.id}" title="Descargar copia (.json)" aria-label="Descargar copia">${ic('down')}</button>
+      <button data-act="arch-del" data-id="${a.id}" class="arch-del" title="Borrar de la lista" aria-label="Borrar partido guardado">${ic('x')}</button>
+    </li>`).join('')}</ul>`;
+}
+
 async function newMatch(){
-  if (!(await ask('¿Empezar un partido nuevo desde el 1er tiempo?\nSe borran reloj, cambios y acciones. Se mantienen plantilla, alineación y ajustes.\n\nConsejo: exporta antes el partido actual si lo quieres guardar.', 'Nuevo partido', true))) return;
+  if (!(await ask('¿Empezar un partido nuevo desde el 1er tiempo?\nEl partido actual se guarda en «Partidos guardados» (Ajustes). Se mantienen plantilla, alineación y ajustes.', 'Nuevo partido'))) return;
+  if (!archiveCurrent() && !(await ask('No se pudo guardar el partido actual (memoria llena).\n¿Empezar igualmente y perderlo?', 'Empezar igualmente', true))) return;
   Object.assign(S, emptyMatch());
   S.info = Object.assign(S.info, {jornada:'', fecha:'', hora:'', arbitro:''});
   S.config.teamR = ''; S.crestR = null;
@@ -1323,13 +1368,16 @@ function renderCfg(){
         <td><button data-act="del-player" data-id="${p.id}" title="Eliminar" aria-label="Eliminar jugadora">${ic('x')}</button></td></tr>`).join('')}
     </table></div>
     <div class="actions"><button data-act="add-player">+ Añadir jugadora</button></div>
+    <h3>Partidos guardados <small>en este iPad</small></h3>
+    <div class="actions" style="margin:0 0 10px"><button data-act="arch-save">Guardar partido actual</button></div>
+    ${archiveHTML()}
     <h3>Datos</h3>
     <div class="actions">
       <button data-act="export">Exportar partido (.json)</button>
       <button data-act="import">Importar partido</button>
       <button data-act="reset" class="danger">Borrar todo</button>
     </div>
-    <p class="note">Todo se guarda en este navegador automáticamente. Exporta el .json al terminar para tener copia.</p>
+    <p class="note">Todo se guarda en este dispositivo automáticamente. Las actualizaciones de la app no borran nada. Para tener copia fuera del iPad, descarga el .json de cada partido.</p>
     <input type="file" id="fileIn" accept=".json,application/json" hidden>
     <input type="file" id="crestIn" accept="image/*" hidden>`;
 }
@@ -1357,7 +1405,7 @@ el('tab-cfg').addEventListener('change', e => {
   if (t.id === 'fileIn'){
     const file = t.files[0]; if (!file) return;
     const r = new FileReader();
-    r.onload = () => { try { const o = JSON.parse(r.result); if (!o.players || !o.clock) throw 0; S = o; normalize(); commit(); renderCfg(); toast('Partido importado'); } catch(err){ say('Archivo no válido.'); } };
+    r.onload = () => { try { const o = JSON.parse(r.result); if (!o.players || !o.clock) throw 0; archiveCurrent(); S = o; normalize(); archiveCurrent(); commit(); renderCfg(); toast('Partido importado'); } catch(err){ say('Archivo no válido.'); } };
     r.readAsText(file); t.value = ''; return;
   }
   if (t.dataset.f){
@@ -1407,6 +1455,20 @@ document.addEventListener('click', async e => {
     case 'reset': if (!(await ask('¿Borrar TODO, plantilla incluida?', 'Borrar todo', true))) return; S = blankState(); normalize(); commit(); renderCfg(); return;
     case 'export': return download(`hoja_${S.info.fecha || 'partido'}_${(rivalName()).replace(/\s+/g,'_')}.json`, JSON.stringify(S, null, 2));
     case 'import': return el('fileIn').click();
+    case 'arch-save': { if (!hasMatchData()){ toast('Este partido aún no tiene datos'); return; } if (archiveCurrent()) toast('Partido guardado'); return renderCfg(); }
+    case 'arch-load': {
+      const a = loadArchive().find(x => x.id === id); if (!a) return;
+      if (!(await ask(`¿Abrir «${a.label}»?\nEl partido actual se guarda antes en la lista.`, 'Abrir'))) return;
+      if (!archiveCurrent()) return;
+      S = JSON.parse(JSON.stringify(a.data)); normalize(); commit(); renderCfg();
+      toast('Partido abierto. Revisa la pestaña Hoja para imprimir.'); return;
+    }
+    case 'arch-dl': { const a = loadArchive().find(x => x.id === id); if (a) download(`hoja_${a.fecha || 'partido'}_${(a.data.config.teamR || 'rival').replace(/\s+/g,'_')}.json`, JSON.stringify(a.data, null, 2)); return; }
+    case 'arch-del': {
+      const a = loadArchive().find(x => x.id === id); if (!a) return;
+      if (!(await ask(`¿Borrar «${a.label}» de la lista?\nNo se puede deshacer. Si quieres conservarlo, descárgalo antes.`, 'Borrar', true))) return;
+      localStorage.setItem(ARCH_KEY, JSON.stringify(loadArchive().filter(x => x.id !== id))); return renderCfg();
+    }
     case 'add-player': S.players.push({id:uid(), nombre:'', corto:'', pos:'', dorsal:0, conv:true, t1:false}); commit(); renderCfg(); return;
     case 'del-player': {
       const used = S.subs.some(s => s.out === id || s.in === id) || S.events.some(x => x.pid === id);
